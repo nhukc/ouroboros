@@ -1,0 +1,9 @@
+{
+  "players": [
+    {"name": "player1", "endpoint_url": "http://10.128.0.4:8001", "score": 0},
+    {"name": "player2", "endpoint_url": "http://10.128.0.4:8002", "score": 0},
+    {"name": "player3", "endpoint_url": "http://10.128.0.4:8003", "score": 0},
+    {"name": "player4", "endpoint_url": "http://10.128.0.4:8004", "score": 0},
+    {"name": "player5", "endpoint_url": "http://10.128.0.4:8005", "score": 0}
+  ]
+}

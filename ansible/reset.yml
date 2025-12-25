@@ -1,0 +1,81 @@
+---
+- name: Reset Reality Server
+  hosts: reality
+  become: yes
+  tasks:
+    - name: Stop service
+      systemd:
+        name: nomic-reality
+        state: stopped
+      failed_when: false
+
+    - name: Delete nomic user and home
+      user:
+        name: nomic
+        state: absent
+        remove: yes
+
+    - name: Remove systemd service
+      file:
+        path: /etc/systemd/system/nomic-reality.service
+        state: absent
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Clear journal logs for nomic-reality
+      shell: journalctl --rotate && journalctl --vacuum-time=1s -u nomic-reality
+      failed_when: false
+
+
+- name: Clean local files
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  become: no
+  tasks:
+    - name: Remove fetched SSH key
+      file:
+        path: "{{ playbook_dir }}/nomic_key"
+        state: absent
+
+
+- name: Reset AI Server
+  hosts: ai
+  become: yes
+  tasks:
+    - name: Stop services
+      systemd:
+        name: "nomic-{{ item.name }}"
+        state: stopped
+      loop: "{{ players }}"
+      failed_when: false
+
+    - name: Delete player users and homes
+      user:
+        name: "{{ item.name }}"
+        state: absent
+        remove: yes
+      loop: "{{ players }}"
+
+    - name: Remove systemd services
+      file:
+        path: "/etc/systemd/system/nomic-{{ item.name }}.service"
+        state: absent
+      loop: "{{ players }}"
+
+    - name: Remove env files
+      file:
+        path: "/etc/nomic-{{ item.name }}.env"
+        state: absent
+      loop: "{{ players }}"
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Clear journal logs for player services
+      shell: journalctl --rotate && journalctl --vacuum-time=1s -u nomic-{{ item.name }}
+      loop: "{{ players }}"
+      failed_when: false

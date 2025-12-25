@@ -1,0 +1,26 @@
+all:
+  children:
+    reality:
+      hosts:
+        nomic-reality:
+          ansible_host: 34.60.134.91
+    ai:
+      hosts:
+        nomic-ais:
+          ansible_host: 35.232.201.34
+          players:
+            - name: player1
+              port: 8001
+            - name: player2
+              port: 8002
+            - name: player3
+              port: 8003
+            - name: player4
+              port: 8004
+            - name: player5
+              port: 8005
+  vars:
+    ansible_user: huck
+    ansible_python_interpreter: /usr/bin/python3
+    reality_internal_ip: 10.128.0.3
+    ai_internal_ip: 10.128.0.4

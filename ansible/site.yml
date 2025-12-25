@@ -1,0 +1,409 @@
+---
+- name: Setup Nomic Reality Server
+  hosts: reality
+  become: yes
+  vars:
+    nomic_home: /home/nomic
+    project_src: "{{ playbook_dir }}/.."
+
+  tasks:
+    - name: Create nomic user
+      user:
+        name: nomic
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Install packages
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+          - acl
+        state: present
+        update_cache: yes
+
+    - name: Create directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: nomic
+        group: nomic
+        mode: '0755'
+      loop:
+        - "{{ nomic_home }}/reality"
+        - "{{ nomic_home }}/repo.git"
+        - "{{ nomic_home }}/workdir"
+        - "{{ nomic_home }}/.ssh"
+
+    - name: Generate SSH key
+      community.crypto.openssh_keypair:
+        path: "{{ nomic_home }}/.ssh/nomic_key"
+        type: ed25519
+        comment: nomic-game
+        owner: nomic
+        group: nomic
+
+    - name: Fetch SSH private key
+      fetch:
+        src: "{{ nomic_home }}/.ssh/nomic_key"
+        dest: "{{ playbook_dir }}/nomic_key"
+        flat: yes
+
+    - name: Set SSH config
+      copy:
+        dest: "{{ nomic_home }}/.ssh/config"
+        owner: nomic
+        group: nomic
+        mode: '0600'
+        content: |
+          Host *
+              IdentityFile ~/.ssh/nomic_key
+              StrictHostKeyChecking no
+
+    - name: Read public key
+      slurp:
+        src: "{{ nomic_home }}/.ssh/nomic_key.pub"
+      register: nomic_pubkey
+
+    - name: Add key to authorized_keys
+      authorized_key:
+        user: nomic
+        key: "{{ nomic_pubkey.content | b64decode }}"
+
+    - name: Copy reality server files
+      copy:
+        src: "{{ project_src }}/reality/"
+        dest: "{{ nomic_home }}/reality/"
+        owner: nomic
+        group: nomic
+
+    - name: Copy repo files
+      copy:
+        src: "{{ project_src }}/repo/"
+        dest: "{{ nomic_home }}/workdir/"
+        owner: nomic
+        group: nomic
+
+    - name: Configure git for nomic user
+      become_user: nomic
+      git_config:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        scope: global
+      loop:
+        - { name: user.email, value: "nomic@ouroboros.game" }
+        - { name: user.name, value: "Reality" }
+        - { name: init.defaultBranch, value: "main" }
+
+    - name: Initialize bare git repo
+      become_user: nomic
+      command: git init --bare {{ nomic_home }}/repo.git
+      args:
+        creates: "{{ nomic_home }}/repo.git/HEAD"
+
+    - name: Initialize workdir git repo
+      become_user: nomic
+      command: git init
+      args:
+        chdir: "{{ nomic_home }}/workdir"
+        creates: "{{ nomic_home }}/workdir/.git"
+
+    - name: Add all files to git
+      become_user: nomic
+      command: git add -A
+      args:
+        chdir: "{{ nomic_home }}/workdir"
+
+    - name: Check for changes to commit
+      become_user: nomic
+      command: git diff --cached --quiet
+      args:
+        chdir: "{{ nomic_home }}/workdir"
+      register: git_diff
+      failed_when: false
+      changed_when: git_diff.rc == 1
+
+    - name: Commit initial files
+      become_user: nomic
+      command: git commit -m "Initial Nomic rules"
+      args:
+        chdir: "{{ nomic_home }}/workdir"
+      when: git_diff.rc == 1
+
+    - name: Rename branch to main
+      become_user: nomic
+      command: git branch -m main
+      args:
+        chdir: "{{ nomic_home }}/workdir"
+      failed_when: false
+
+    - name: Set git remote
+      become_user: nomic
+      command: git remote add origin {{ nomic_home }}/repo.git
+      args:
+        chdir: "{{ nomic_home }}/workdir"
+      failed_when: false
+
+    - name: Push to bare repo
+      become_user: nomic
+      command: git push -u origin main --force
+      args:
+        chdir: "{{ nomic_home }}/workdir"
+
+    - name: Create virtual environment
+      become_user: nomic
+      command: python3 -m venv {{ nomic_home }}/venv
+      args:
+        creates: "{{ nomic_home }}/venv/bin/python"
+
+    - name: Install Python dependencies
+      become_user: nomic
+      pip:
+        name:
+          - flask
+          - requests
+        virtualenv: "{{ nomic_home }}/venv"
+
+    - name: Create systemd service
+      copy:
+        dest: /etc/systemd/system/nomic-reality.service
+        content: |
+          [Unit]
+          Description=Nomic Reality Server
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=nomic
+          WorkingDirectory={{ nomic_home }}/reality
+          Environment=PATH={{ nomic_home }}/venv/bin:/usr/local/bin:/usr/bin:/bin
+          Environment=REPO_PATH={{ nomic_home }}/workdir
+          Environment=PYTHONUNBUFFERED=1
+          ExecStart={{ nomic_home }}/venv/bin/python server.py
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart reality service
+
+    - name: Enable and start service
+      systemd:
+        name: nomic-reality
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: Restart reality service
+      systemd:
+        name: nomic-reality
+        state: restarted
+        daemon_reload: yes
+
+
+- name: Setup Nomic AI Players
+  hosts: ai
+  become: yes
+  vars:
+    project_src: "{{ playbook_dir }}/.."
+    ssh_key_file: "{{ playbook_dir }}/nomic_key"
+    git_repo: "nomic@{{ reality_internal_ip }}:/home/nomic/repo.git"
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Check SSH key exists
+      local_action:
+        module: stat
+        path: "{{ ssh_key_file }}"
+      register: key_stat
+      become: no
+
+    - name: Fail if SSH key missing
+      fail:
+        msg: "SSH key not found. Reality playbook should have fetched it."
+      when: not key_stat.stat.exists
+
+    - name: Install packages
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+          - acl
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: Check if Node.js is installed
+      command: node --version
+      register: node_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install Node.js
+      shell: curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs
+      when: node_check.rc != 0
+
+    - name: Install Claude CLI
+      npm:
+        name: "@anthropic-ai/claude-code"
+        global: yes
+        state: present
+
+    - name: Create player users
+      user:
+        name: "{{ item.name }}"
+        shell: /bin/bash
+        create_home: yes
+      loop: "{{ players }}"
+
+    - name: Create .ssh directories
+      file:
+        path: "/home/{{ item.name }}/.ssh"
+        state: directory
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: '0700'
+      loop: "{{ players }}"
+
+    - name: Copy SSH key
+      copy:
+        src: "{{ ssh_key_file }}"
+        dest: "/home/{{ item.name }}/.ssh/nomic_key"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: '0600'
+      loop: "{{ players }}"
+
+    - name: Set SSH config
+      copy:
+        dest: "/home/{{ item.name }}/.ssh/config"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: '0600'
+        content: |
+          Host *
+              IdentityFile ~/.ssh/nomic_key
+              StrictHostKeyChecking no
+      loop: "{{ players }}"
+
+    - name: Copy spawner.py
+      copy:
+        src: "{{ project_src }}/ai/spawner.py"
+        dest: "/home/{{ item.name }}/spawner.py"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+      loop: "{{ players }}"
+
+    - name: Copy player.py
+      copy:
+        src: "{{ project_src }}/ai/player.py"
+        dest: "/home/{{ item.name }}/player.py"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+      loop: "{{ players }}"
+
+    - name: Configure git email for players
+      become_user: "{{ item.name }}"
+      git_config:
+        name: user.email
+        value: "{{ item.name }}@ouroboros.game"
+        scope: global
+      loop: "{{ players }}"
+
+    - name: Configure git name for players
+      become_user: "{{ item.name }}"
+      git_config:
+        name: user.name
+        value: "{{ item.name }}"
+        scope: global
+      loop: "{{ players }}"
+
+    - name: Configure git default branch for players
+      become_user: "{{ item.name }}"
+      git_config:
+        name: init.defaultBranch
+        value: main
+        scope: global
+      loop: "{{ players }}"
+
+    - name: Clone git repo
+      become_user: "{{ item.name }}"
+      git:
+        repo: "{{ git_repo }}"
+        dest: "/home/{{ item.name }}/repo"
+        accept_hostkey: yes
+      loop: "{{ players }}"
+
+    - name: Create virtual environments
+      become_user: "{{ item.name }}"
+      command: python3 -m venv /home/{{ item.name }}/venv
+      args:
+        creates: "/home/{{ item.name }}/venv/bin/python"
+      loop: "{{ players }}"
+
+    - name: Install Python dependencies
+      become_user: "{{ item.name }}"
+      pip:
+        name:
+          - flask
+          - requests
+          - mypy
+          - types-flask
+          - types-requests
+        virtualenv: "/home/{{ item.name }}/venv"
+      loop: "{{ players }}"
+
+    - name: Create environment files
+      copy:
+        dest: "/etc/nomic-{{ item.name }}.env"
+        mode: '0600'
+        content: |
+          ANTHROPIC_API_KEY={{ anthropic_api_key }}
+      loop: "{{ players }}"
+
+    - name: Create systemd services
+      copy:
+        dest: "/etc/systemd/system/nomic-{{ item.name }}.service"
+        content: |
+          [Unit]
+          Description=Nomic AI Player {{ item.name }}
+          After=network.target
+
+          [Service]
+          Type=simple
+          User={{ item.name }}
+          WorkingDirectory=/home/{{ item.name }}
+          EnvironmentFile=/etc/nomic-{{ item.name }}.env
+          Environment=PATH=/home/{{ item.name }}/venv/bin:/usr/local/bin:/usr/bin:/bin
+          Environment=PYTHONUNBUFFERED=1
+          Environment=PLAYER_NAME={{ item.name }}
+          Environment=PORT={{ item.port }}
+          Environment=REALITY_URL=http://{{ reality_internal_ip }}:5000
+          Environment=HOME=/home/{{ item.name }}
+          ExecStart=/home/{{ item.name }}/venv/bin/python spawner.py
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      loop: "{{ players }}"
+      notify: Reload systemd
+
+    - name: Enable and start services
+      systemd:
+        name: "nomic-{{ item.name }}"
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      loop: "{{ players }}"
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
