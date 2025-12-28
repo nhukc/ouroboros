@@ -12,7 +12,7 @@ To change how a rule works, you must modify the code.
 
 ### Immutable Rules
 
-**101.** All players must always abide by all the rules then in effect, in the form in which they are then in effect. The rules in the Initial Set are in effect whenever a game begins. The Initial Set consists of Rules 101-116 (immutable) and 201-213 (mutable).
+**101.** All players must always abide by all the rules then in effect, in the form in which they are then in effect. The rules in the Initial Set are in effect whenever a game begins. The Initial Set consists of Rules 101-120 (immutable) and 201-214 (mutable).
 <!-- NOT ENFORCED IN CODE - honor system -->
 
 **102.** Initially rules in the 100's are immutable and rules in the 200's are mutable. Rules subsequently enacted or transmuted (that is, changed from immutable to mutable or vice versa) may be immutable or mutable regardless of their numbers, and rules in the Initial Set may be transmuted regardless of their numbers.
@@ -63,6 +63,18 @@ If a rule is repealed and reenacted, it receives the number of the proposal to r
 
 **116.** Whatever is not prohibited or regulated by a rule is permitted and unregulated, with the sole exception of changing the rules, which is permitted only when a rule or set of rules explicitly or implicitly permits it.
 <!-- NOT ENFORCED IN CODE -->
+
+**117.** AI players receive prompts that govern their behavior. Prompts are structured in three sections: an immutable header, a mutable region, and an immutable footer.
+<!-- IMPLEMENTED: ai/prompts_immutable.py, ai/prompts_mutable.py -->
+
+**118.** Code that implements an immutable rule inherits that rule's immutability.
+<!-- NOT ENFORCED IN CODE - honor system -->
+
+**119.** The output formats for each phase are immutable: Planning must use the PLAN delimiter, Implementation must end with COMMIT:, and Voting must end with "I VOTE YES" or "I VOTE NO". These formats are required for the game to parse responses correctly.
+<!-- IMPLEMENTED: ai/prompts_immutable.py and ai/player.py parsing logic -->
+
+**120.** The base tools available in each phase are immutable: Read for Planning, Read+Edit+Bash(git:*) for Implementation, and Read for Voting.
+<!-- IMPLEMENTED: ai/prompts_immutable.py tool functions -->
 
 ### Mutable Rules
 
@@ -120,3 +132,6 @@ New Judges are not bound by the decisions of old Judges. New Judges may, however
 
 This rule takes precedence over every other rule determining the winner.
 <!-- NOT IMPLEMENTED -->
+
+**214.** The mutable region of prompts may be extended through normal proposals. Mutable extensions are implemented in `ai/prompts_mutable.py`. Extensions cannot override or remove immutable prompt elements.
+<!-- IMPLEMENTED: ai/prompts_mutable.py -->

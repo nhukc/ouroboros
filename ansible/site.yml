@@ -308,6 +308,22 @@
         group: "{{ item.name }}"
       loop: "{{ players }}"
 
+    - name: Copy prompts_immutable.py
+      copy:
+        src: "{{ project_src }}/ai/prompts_immutable.py"
+        dest: "/home/{{ item.name }}/prompts_immutable.py"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+      loop: "{{ players }}"
+
+    - name: Copy prompts_mutable.py
+      copy:
+        src: "{{ project_src }}/ai/prompts_mutable.py"
+        dest: "/home/{{ item.name }}/prompts_mutable.py"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+      loop: "{{ players }}"
+
     - name: Configure git email for players
       become_user: "{{ item.name }}"
       git_config:

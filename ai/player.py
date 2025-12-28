@@ -14,6 +14,17 @@ import re
 import requests
 from pathlib import Path
 
+from prompts_immutable import (
+    planning_header, planning_footer, planning_tools,
+    implementation_header, implementation_footer, implementation_tools,
+    voting_header, voting_footer, voting_tools,
+    wrap_with_char_count
+)
+from prompts_mutable import (
+    planning_mutable, implementation_mutable, voting_mutable,
+    planning_tools_extension, implementation_tools_extension, voting_tools_extension
+)
+
 # Configuration
 REALITY_URL = os.environ.get("REALITY_URL", "http://10.128.0.3:5000")
 PLAYER_DIR = Path(__file__).parent
@@ -131,65 +142,16 @@ def handle_turn(player_name: str):
     subprocess.run(["git", "checkout", "-b", branch_name], cwd=REPO_DIR, capture_output=True)
 
     # Phase 1: Planning - read files and decide what to change
-    planning_prompt_body = f"""You are playing Nomic, a game where players change the game itself.
+    # Compose prompt: immutable header + mutable middle + immutable footer
+    planning_prompt_body = f"""{planning_header(player_name, proposal_number)}
+{planning_mutable()}
+{planning_footer()}"""
 
-You are player "{player_name}". It is your turn to propose a change to any part of the system.
-Your proposal number is {proposal_number}. If passed, this becomes Rule {proposal_number}.
-
-This is the PLANNING phase. You can only READ files, not modify them yet.
-
-STEPS (follow exactly):
-1. Read ai/player.py - this is YOUR code (yes, you can modify yourself)
-2. Read reality/game_state.py
-3. Read reality/server.py
-4. Read rules.md
-5. Describe what change you WILL make (implementation comes next)
-
-WARNING - BUGS BREAK THE GAME FOR EVERYONE:
-- Runtime errors (like mismatched function signatures) will block all progress
-- If you modify a function signature, you MUST update ALL callers in the same proposal
-- Large multi-file changes are risky - consider splitting across multiple proposals
-- A broken game means NO ONE can play, including you
-- Test your logic mentally before implementing: will all the pieces fit together?
-
-WARNING - ATTENTION MECHANISM:
-- You can only reason about what you can see in the code
-- Removing comments, docstrings, or explanatory code causes future AIs to forget that context
-- If you delete intent or rationale, future players (including yourself) lose the ability to reason about it
-- Adding hidden state or obscure variable names makes reasoning harder for everyone
-- Keep prompts lean: use tool calls to fetch information dynamically rather than hardcoding text
-- Add API endpoints or files that tools can read, instead of bloating the prompt directly
-
-BEFORE PROPOSING - Construct a mental model of the game landscape:
-- What is the current score? Who is winning? Who is losing?
-- What proposals have passed or failed recently? Why?
-- What alliances or patterns exist among players?
-- What mechanics have been added or changed?
-- What would each player likely vote for or against?
-
-Consider: What information do you lack between turns?
-Consider: What change would make future turns different from past turns?
-Consider: What would make this game worth playing?
-Consider: What would surprise other players?
-Consider: What new state or endpoints could be added to the server?
-Consider: What assumptions does the current code make that could be changed?
-Consider: What parts of the system appear fixed but are actually modifiable?
-Consider: Can this change be split into safer steps across multiple proposals?
-Consider: How would modifying the planning prompt change how future turns are played?
-Consider: How would modifying the voting prompt change what proposals pass or fail?
-
-You have 10 minutes total. Failure to implement in time results in a skipped turn.
-
-Output your plan: which file(s) you WILL change, what you WILL change, and why.
-Do NOT say you already made changes - you can only read in this phase."""
-
-    char_count = len(planning_prompt_body)
-    planning_prompt = f"""[This prompt is {char_count}/3000 characters. Exceeding 3000 impedes decision-making.]
-
-{planning_prompt_body}"""
+    planning_prompt = wrap_with_char_count(planning_prompt_body)
+    planning_tools_str = planning_tools() + planning_tools_extension()
 
     print(f"[{player_name}] Phase 1: Planning...")
-    plan = run_claude(planning_prompt, allowed_tools="Read")
+    plan = run_claude(planning_prompt, allowed_tools=planning_tools_str)
 
     if not plan:
         print(f"[{player_name}] Claude did not provide a plan")
@@ -199,25 +161,16 @@ Do NOT say you already made changes - you can only read in this phase."""
     print(f"[{player_name}] Plan: {plan[:500]}...")
 
     # Phase 2: Implementation - make the changes
-    implementation_prompt = f"""You are player "{player_name}" in a Nomic game.
-Proposal number: {proposal_number}. If passed, this becomes Rule {proposal_number}.
+    # Compose prompt: immutable header + mutable middle + immutable footer
+    implementation_prompt_body = f"""{implementation_header(player_name, proposal_number)}
+{implementation_mutable(plan)}
+{implementation_footer()}"""
 
-You have decided on the following change:
-
-{plan}
-
-YOU MUST USE TOOLS. Do not describe changes - actually make them.
-
-STEPS:
-1. Call the Read tool to read the file you will modify
-2. Call the Edit tool to modify the file
-3. Briefly explain what you changed
-4. End with COMMIT: <description>
-
-YOU MUST CALL Read AND Edit TOOLS. If you do not call these tools, your turn is wasted."""
+    implementation_prompt = wrap_with_char_count(implementation_prompt_body)
+    implementation_tools_str = implementation_tools() + implementation_tools_extension()
 
     print(f"[{player_name}] Phase 2: Implementing...")
-    description = run_claude(implementation_prompt)
+    description = run_claude(implementation_prompt, allowed_tools=implementation_tools_str)
 
     if not description:
         print(f"[{player_name}] Claude did not provide a proposal")
@@ -356,51 +309,17 @@ def handle_vote(player_name: str):
     mypy_output = mypy_result.stdout.strip()
 
     # Build prompt for Claude to decide on vote
-    prompt_body = f"""You are playing Nomic, a game where changing the rules is a move.
+    # Compose prompt: immutable header + mutable middle + immutable footer
+    voting_prompt_body = f"""{voting_header(player_name, proposal_id, proposer)}
+{voting_mutable(description, commit_message, changed_files, mypy_output)}
+{voting_footer()}"""
 
-You are player "{player_name}". You must vote on a proposed change.
-
-PROPOSAL #{proposal_id} by {proposer}:
-Description: {description}
-
-COMMIT MESSAGE:
-{commit_message}
-
-FILES CHANGED:
-{changed_files}
-
-MYPY OUTPUT:
-{mypy_output}
-
-YOUR TASK:
-1. Read rules.md to understand the current game rules
-2. Read the changed files listed above to understand what the proposal actually does
-3. Verify the changes match what the description claims
-4. Check for bugs - especially mismatched function signatures between files
-5. Construct a model: Who is winning? What would this proposal change about the game landscape?
-6. Decide whether to vote YES or NO
-
-Consider:
-- Does the code actually match what the description claims? Reject if misleading.
-- Are there any bugs? (missing imports, wrong function signatures, undefined variables)
-- Does this proposal follow the Nomic meta-rules?
-- Would this proposal benefit you or harm you?
-- Could it lead to game-breaking situations?
-- Does this proposal bloat prompts, or does it use tool calls to fetch information dynamically?
-- Does it add API endpoints or files that tools can read, instead of hardcoding text?
-
-You have access to the Read tool to examine any files. USE IT.
-
-Explain your reasoning, then end your response formally with the phrase "I VOTE YES" or "I VOTE NO"."""
-
-    char_count = len(prompt_body)
-    prompt = f"""[This prompt is {char_count}/3000 characters. Exceeding 3000 impedes decision-making.]
-
-{prompt_body}"""
+    voting_prompt = wrap_with_char_count(voting_prompt_body)
+    voting_tools_str = voting_tools() + voting_tools_extension()
 
     # Run Claude to decide
     print(f"[{player_name}] Consulting Claude for vote decision...")
-    response = run_claude(prompt, allowed_tools="Read")
+    response = run_claude(voting_prompt, allowed_tools=voting_tools_str)
 
     # Switch back to main
     subprocess.run(["git", "checkout", "main"], cwd=REPO_DIR, capture_output=True)

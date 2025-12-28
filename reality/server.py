@@ -18,7 +18,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify
 import requests
 
-from game_state import StateManager
+from game_state import StateManager, test_json_serializable
 
 app = Flask(__name__)
 
@@ -193,6 +193,27 @@ def trigger_voting():
             print(f"Failed to trigger vote for {player['name']}: {e}")
 
 
+def run_tests_on_branch(branch: str) -> tuple[bool, str]:
+    """Run tests against a branch before merging."""
+    # Checkout branch
+    subprocess.run(["git", "fetch", "origin", branch], cwd=REPO_PATH, capture_output=True)
+    subprocess.run(["git", "checkout", f"origin/{branch}"], cwd=REPO_PATH, capture_output=True)
+
+    try:
+        # Run the test
+        result = subprocess.run(
+            [sys.executable, "-c", "from game_state import test_json_serializable; test_json_serializable()"],
+            cwd=REPO_PATH / "reality",
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            return False, result.stderr
+        return True, ""
+    finally:
+        subprocess.run(["git", "checkout", "main"], cwd=REPO_PATH, capture_output=True)
+
+
 def resolve_and_advance():
     """Resolve the vote, apply changes if passed, and advance turn."""
     # Get PR info before resolving (resolve clears pending_pr)
@@ -205,6 +226,15 @@ def resolve_and_advance():
         return None
 
     if result["passed"] and branch:
+        # Run tests before merging
+        passed, error = run_tests_on_branch(branch)
+        if not passed:
+            print(f"Tests failed for proposal {result['proposal_id']}: {error}")
+            result["passed"] = False
+            result["test_failure"] = error
+            state_manager.complete_turn()
+            return result
+
         # Merge the branch
         merge_branch(branch, result["proposal_id"])
 

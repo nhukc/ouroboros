@@ -270,3 +270,10 @@ class StateManager:
         """Reset the game to initial state (for testing)."""
         self.state = GameState(players=[])
         self.save()
+
+
+def test_json_serializable():
+    """Test that get_state_summary() returns JSON-serializable data."""
+    import json
+    manager = StateManager()
+    json.dumps(manager.get_state_summary())
